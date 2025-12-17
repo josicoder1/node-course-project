@@ -2,84 +2,80 @@ const path = require('path');
 
 const express = require('express');
 const bodyParser = require('body-parser');
-const notPage = require('./controllers/404');
+const mongoose = require('mongoose');
+const session = require('express-session');
+const MongoDBStore = require('connect-mongodb-session')(session);
 
-const sequelize =require('./util/database');
-const Product = require('./models/product');
-
+const errorController = require('./controllers/404');
 const User = require('./models/user');
-const Cart = require('./models/cart');
-const CartItem = require('./models/cart-item');
-const Order = require('./models/order');
-const OrderItem = require('./models/order-item');
+
+const MONGODB_URI =
+  'mongodb+srv://josi:yosa1089@cluster0.egjq6mk.mongodb.net/shop';
 
 const app = express();
+const store = new MongoDBStore({
+  uri: MONGODB_URI,
+  collection: 'sessions'
+});
 
 app.set('view engine', 'ejs');
 app.set('views', 'views');
 
 const adminRoutes = require('./routes/admin');
 const shopRoutes = require('./routes/shop');
-const { constants } = require('buffer');
-
- 
+const authRoutes = require('./routes/auth');
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(
+  session({
+    secret: 'my secret',
+    resave: false,
+    saveUninitialized: false,
+    store: store
+  })
+);
 
-app.use((req, res, next)=>{
-    User.findByPk(1)
-    .then(user =>{
-        req.user =user;
-        next();
+app.use((req, res, next) => {
+  if (!req.session.user) {
+    return next(); // no session → skip attaching user
+  }
+
+  User.findById(req.session.user._id)
+    .then(user => {
+      if (!user) {
+        return next(); // user not found → skip
+      }
+      req.user = user; // attach user to request
+      next();
     })
-    .catch(err=>console.log(err));
+    .catch(err => next(err)); // pass errors to Express error handler
 });
+
+
 app.use('/admin', adminRoutes);
 app.use(shopRoutes);
+app.use(authRoutes);
 
-app.use(notPage.pageNot);
+app.use(errorController.pageNot);
 
-Product.belongsTo(User, { 
-  constraints: true,
-  onDelete: 'CASCADE'
-});
-User.hasMany(Product);
-
-User.hasOne(Cart);
-Cart.belongsTo(User);
-
-Cart.belongsToMany(Product, {through: CartItem});
-Product.belongsToMany(Cart, {through: CartItem});
-
-Order.belongsTo(User);
-User.hasMany(Order);
-
-Order.belongsToMany(Product, { through: OrderItem });
-Product.belongsToMany(Order, { through: OrderItem }); // <-- YOU MISSED THIS
-
-
-sequelize
-  .sync({ force: true })
-  .then(() => {
-    return User.findByPk(1);
-  })
-  .then(user => {
-    if (!user) {
-      return User.create({ name: 'Max', email: 'jsphtadesse@gmail.com' });
-    }
-    return user;
-  })
-  .then(user => {
-    return user.getCart().then(cart => {
-      if (!cart) {
-        return user.createCart();
+mongoose
+  .connect(MONGODB_URI)
+  .then(result => {
+    User.findOne().then(user => {
+      if (!user) {
+        const user = new User({
+          name: 'Max',
+          email: 'max@test.com',
+          cart: {
+            items: []
+          }
+        });
+        user.save();
       }
-      return cart;
     });
-  })
-  .then(cart => {
     app.listen(3000);
   })
-  .catch(err => console.log(err));
-
+  .catch(err => {
+    console.log(err);
+  });
